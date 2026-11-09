@@ -63,11 +63,6 @@
   --spacing-sidebar: 240px; /* w-sidebar */
   --spacing-topbar: 64px; /* h-topbar */
   --container-content: 1200px; /* max-w-content: 본문 최대 폭 */
-
-  /* ── 임시 호환용: create-next-app 기본 page.tsx 가 사용 ──
-     랜딩 페이지를 새로 만들 때 이 두 줄은 삭제합니다. */
-  --color-background: var(--color-surface);
-  --color-foreground: var(--color-ink);
 }
 
 /* 기본 바탕 */

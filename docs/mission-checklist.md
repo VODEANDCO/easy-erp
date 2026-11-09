@@ -30,15 +30,17 @@
 - ⬜ 공개 키로 직접 조회가 막히는지 확인
 
 ## Phase 3 — 등록·목록·상세
-- ⬜ 공통 레이아웃: Sidebar(준비 중 메뉴 포함), Header, Breadcrumb
-- ⬜ UI 컴포넌트: Button, Input, Select, Textarea, Badge, Card, Skeleton, Empty/Error State, Toast
-- ⬜ zod 스키마, `createProduct` Server Action
-- ⬜ `/products` 목록 (기본 테이블), `/products/[id]` 상세, `notFound` 처리
-- ⬜ loading / error / not-found 화면
+> 🔄 = DB 연결 없이 화면·검증까지 만든 상태. **실제 저장·조회는 아직 동작하지 않음** (미리보기 데이터 사용)
+- 🔄 공통 레이아웃: Sidebar(준비 중 메뉴 포함), Header, Breadcrumb, 모바일 드로어
+- 🔄 UI 컴포넌트: Button, Input, Select, Textarea, Field, Badge, Card, Skeleton, Empty/Error State, Alert, Dialog, Pagination (Toast는 DB 연결 후)
+- ✅ zod 스키마 (자동 테스트 63개 통과, 원 단위 정수 규칙 포함)
+- 🔄 `createProduct` Server Action: 서버 재검증까지만, DB 저장 ⬜
+- 🔄 `/products` 목록, `/products/[id]` 상세, `notFound` 처리 (미리보기 데이터 기준 확인)
+- 🔄 loading(Suspense) / error / not-found 화면
 
 ## Phase 4 — 수정·삭제
-- ⬜ `/products/[id]/edit`, `updateProduct` (수정 충돌 검사 포함)
-- ⬜ Confirmation Dialog, `deleteProduct`
+- 🔄 `/products/[id]/edit` 화면, `updateProduct` 서버 재검증 (수정 충돌 검사·DB 저장 ⬜)
+- 🔄 Confirmation Dialog, `deleteProduct` (ID 검증까지만, DB 삭제 ⬜)
 - ⬜ 캐시 무효화로 목록·상세에 바로 반영
 
 ## Phase 5 — 이미지 업로드와 상태 처리
