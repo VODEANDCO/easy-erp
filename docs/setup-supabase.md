@@ -1,39 +1,38 @@
-# Supabase 연결 가이드
+# Supabase 연결 가이드 (미션 6 기준)
 
-> ⚠️ 아래 1~3번은 **외부 서비스 생성과 비밀값 입력**이 포함되어 있어,
-> 프로젝트 담당자의 승인 후에 진행합니다. 코드 쪽 준비는 이미 끝나 있습니다.
+> 프로젝트 생성과 키 입력은 **프로젝트 담당자가 직접** 진행합니다.
+> 키 값은 채팅, 스크린샷, GitHub 어디에도 붙여넣지 않습니다.
 
-## 1. Supabase 프로젝트 만들기 (무료 플랜)
+## 1. 가입과 조직 만들기
+1. https://supabase.com → **Start your project** (GitHub 계정 로그인 추천)
+2. 조직(Organization) 만들기: Type **Personal**, Plan **Free**
+3. 결제 카드 입력 화면이 나오면 진행하지 않습니다.
 
-1. https://supabase.com 에 로그인 → **New project**
-2. 이름: `easy-erp` / 지역: **Northeast Asia (Seoul)** 권장
-3. DB 비밀번호는 비밀번호 관리자에 저장 (코드나 채팅에 붙여넣지 않기)
-4. 요금제가 **Free** 인지 확인
+## 2. 프로젝트 만들기
+1. **New project**를 누릅니다.
+2. 이름: `easy-erp`, 지역: **Northeast Asia (Seoul)**
+3. DB 비밀번호: **Generate a password**로 만든 뒤 비밀번호 관리자에 저장합니다.
+4. 요금제가 **Free**인지 확인합니다.
+5. 생성이 끝날 때까지 1~2분 기다립니다.
 
-## 2. 환경변수 설정
-
+## 3. 환경변수 설정
 ```bash
 cp .env.example .env.local
 ```
+Supabase 대시보드 → **Project Settings → API Keys**에서 값을 복사합니다.
 
-Supabase 대시보드 → **Project Settings → API Keys** 에서 복사:
+| 변수 | 위치 | 노출 |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Project URL | 공개 가능 |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable key (`sb_publishable_...`) | 공개 가능 |
+| `SUPABASE_SECRET_KEY` | Secret keys (`sb_secret_...`) | **서버 전용, 절대 비공개** |
 
-| 변수 | 위치 |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Project URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable key (`sb_publishable_...`) — 구버전 화면에서는 `anon` key |
-
-`.env.local` 은 git에 올라가지 않습니다. Vercel 배포 시에는 Vercel 프로젝트 설정의 Environment Variables 에 따로 입력합니다.
-
-## 3. 인증 설정 (1단계에서 함께 진행)
-
-- Authentication → Providers → **Email** 활성화
-- Authentication → URL Configuration → Site URL: `http://localhost:3000`
-
-## 4. DB 스키마 적용 방식
-
-- 테이블·RLS·함수는 `supabase/migrations/*.sql` 파일로 작성해 **코드 리뷰 후** 적용합니다.
-- 적용 방법(택1, 승인 후):
+## 4. DB 스키마 적용 (SQL 승인 후)
+- 초안: `supabase/drafts/*.sql` → 승인되면 `supabase/migrations/`로 옮깁니다.
+- 적용 방법 (택1)
+  - 대시보드 **SQL Editor**에 파일 내용을 붙여넣고 Run (초보자 추천)
   - Supabase CLI: `npx supabase link` → `npx supabase db push`
-  - 또는 대시보드 SQL Editor 에 파일 내용을 붙여넣어 실행
-- 적용 후 타입 생성: `npx supabase gen types typescript --linked > lib/supabase/database.types.ts`
+- 적용 확인: Table Editor에 `products`가 보이고, Storage에 `product-images` 버킷이 보이면 성공입니다.
+
+## 5. Vercel 배포 시
+Vercel 프로젝트 → Settings → Environment Variables에 위 3개(선택 항목 포함)를 같은 이름으로 등록합니다.
