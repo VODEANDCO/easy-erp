@@ -53,7 +53,7 @@
 | created_at | timestamptz | DB 자동 생성, 수정 불가 |
 | updated_at | timestamptz | 수정 시 DB 트리거가 자동 갱신 |
 
-SQL 초안: [supabase/drafts/001_products.sql](../supabase/drafts/001_products.sql)
+SQL: [20261109000001_create_products.sql](../supabase/migrations/20261109000001_create_products.sql) (DB 적용 전, 승인 필요)
 
 ### 재고 상태 표시 규칙 (화면에서 계산)
 
@@ -72,29 +72,24 @@ SQL 초안: [supabase/drafts/001_products.sql](../supabase/drafts/001_products.s
 3. **secret 키는 서버 전용이다.** `SUPABASE_SECRET_KEY`에는 `NEXT_PUBLIC_` 접두사를 붙이지 않고, `server-only`로 보호된 파일에서만 읽는다.
 4. **모든 쓰기는 서버에서 검증한다.** zod 검증 후 DB 제약조건이 한 번 더 막는다.
 5. **공개 쓰기를 무제한으로 허용하지 않는다.** 평가자가 별도 코드 없이 테스트할 수 있어야 하므로 **데모 쓰기 코드는 쓰지 않는다** (결정됨).
-   - 상품 최대 300개 (DB 트리거)
-   - 이미지는 5MB, JPEG/PNG/WebP만 허용 (버킷 설정에서 강제). 업로드 후 서버가 파일 앞부분(매직 바이트)을 검사한다.
-   - 버킷 전체 800MB를 넘으면 업로드 URL을 발급하지 않는다 (무료 플랜 1GB 보호)
-   - IP 해시 기반 요청 횟수 제한 (도입 검토 중) → [003_demo_rate_limit.sql](../supabase/drafts/003_demo_rate_limit.sql)
+   - 상품 최대 300개: DB 트리거가 강제하고, 동시 요청도 잠금으로 처리한다
+   - 이미지: 파일당 5MB와 JPEG/PNG/WebP만 허용(버킷이 강제), 매직 바이트 검사(서버가 강제)
+   - 버킷 전체 800MB: 업로드 URL 발급 전에 확인하는 **소프트 한도**이며 강제가 아니다
+   - 요청 횟수 제한: **선택 작업(보류)**. 필수 CRUD를 마친 뒤 검토한다 → [optional/003_demo_rate_limit.sql](../supabase/drafts/optional/003_demo_rate_limit.sql)
 6. **실제 개인정보나 사업 데이터는 저장하지 않는다.** 데모 상품 데이터만 사용한다.
 
-### 요청 횟수 제한 기준 (초안)
+### 요청 횟수 제한 (선택 작업 · 보류)
 
-| 행동 그룹 | 대상 | 한도 (IP당) |
-|---|---|---|
-| `product.write` | 등록, 수정 | 10분에 60회 |
-| `product.delete` | 삭제 | 10분에 30회 |
-| `image.upload` | 업로드 URL 발급 | 10분에 30회 |
-| 조회 | 목록, 상세, 검색 | 제한 없음 |
-
-- 처리 순서: **입력 검증 → 횟수 확인 → DB 저장**. 검증에서 실패한 요청은 횟수에 포함하지 않는다.
-- 횟수 확인 자체가 실패하면 요청을 허용하고(fail-open) 서버 로그에 남긴다. 개수와 용량 한도가 최종 안전망이다.
-- 한도를 넘으면 "요청이 너무 많습니다. 약 n분 후 다시 시도해 주세요"를 표시하고, 입력 내용은 유지한다.
+- 장애 시 **fail-closed**: 제한 확인에 실패하면 쓰기를 거부한다. 기능을 끄려면 `RATE_LIMIT_ENABLED=false`로 명시적으로 끈다.
+- 처리 순서: 입력 검증 → 횟수 확인 → DB 저장. 검증에서 실패한 요청은 횟수에 포함하지 않는다.
+- 한도 숫자는 승인 전까지 확정하지 않는다.
 
 ## 5. 처리 규칙
 
 - **목록 상태는 URL로 관리한다**: `/products?q=&category=&stock=low&sort=latest&page=1`. 잘못된 값은 기본값으로 바꾼다.
-- **수정 충돌 방지**: 수정 폼은 불러온 시점의 `updated_at`을 함께 보낸다. 그 사이에 다른 곳에서 수정됐다면 덮어쓰지 않고 안내한다.
+- **수정 충돌 방지**: 수정 폼은 불러온 시점의 `updated_at`을 함께 보내고, `UPDATE ... WHERE id = ? AND updated_at = ?`로 저장한다. 그 사이에 다른 곳에서 수정됐다면 덮어쓰지 않고 안내한다.
+  - ⚠️ `updated_at`은 DB에서 받은 **문자열 그대로** 돌려보낸다. JavaScript `Date`로 바꾸면 마이크로초가 잘려 항상 "충돌"로 판정된다.
+- **자동 계산 컬럼**: `is_low_stock`, `id`, `created_at`, `updated_at`은 INSERT/UPDATE 데이터에 넣지 않는다.
 - **삭제는 실제 삭제(hard delete)**로 한다. 주문 기능이 생기면 보관(soft delete) 방식으로 바꾼다.
 - **이미지 파일 정리**: DB 반영이 성공한 뒤에 이전 파일을 삭제한다. 자세한 내용은 [specs/storage.md](./specs/storage.md)를 본다.
 - **데이터를 바꾸면 캐시를 갱신한다**: 등록, 수정, 삭제 후 상품 목록과 상세 캐시를 무효화한다.

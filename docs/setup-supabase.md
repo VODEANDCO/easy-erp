@@ -28,7 +28,7 @@ Supabase 대시보드 → **Project Settings → API Keys**에서 값을 복사�
 | `SUPABASE_SECRET_KEY` | Secret keys (`sb_secret_...`) | **서버 전용, 절대 비공개** |
 
 ## 4. DB 스키마 적용 (SQL 승인 후)
-- 초안: `supabase/drafts/*.sql` → 승인되면 `supabase/migrations/`로 옮깁니다.
+- 적용 대상: `supabase/migrations/*.sql` (파일이 있어도 **적용은 별도 승인 후**). `supabase/drafts/optional/`은 적용하지 않습니다.
 - 적용 방법 (택1)
   - 대시보드 **SQL Editor**에 파일 내용을 붙여넣고 Run (초보자 추천)
   - Supabase CLI: `npx supabase link` → `npx supabase db push`

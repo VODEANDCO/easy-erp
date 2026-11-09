@@ -12,16 +12,18 @@
 ## Phase 1 — 기능 명세와 DB 설계
 - ✅ 페이지별 기능 명세 → [specs/products.md](./specs/products.md)
 - ✅ Storage 설계 → [specs/storage.md](./specs/storage.md)
-- ✅ SQL 초안 → `supabase/drafts/001~003`
+- ✅ SQL v2 → `supabase/migrations/` (001·002, **DB 미적용**), 선택 작업 → `supabase/drafts/optional/003`
+- ✅ PGlite 사전 검증 → [sql-verification.md](./sql-verification.md)
 - ✅ 접근 차단 방식 결정: RLS 활성화(정책 없음) + 권한 회수
 - ✅ 데모 쓰기 코드 사용 안 함 (결정)
-- ⏸ 001·002 SQL 최종 승인
-- ⏸ 003 요청 횟수 제한 도입 승인
+- ✅ 001·002 SQL 코드 검토 및 수정 (v2)
+- ⏸ 001·002 Supabase 적용 최종 승인
+- ✅ 상품 개수 한도 300개 유지 (Storage 용량은 별도 관리로 결정)
 
 ## Phase 2 — Supabase 연결과 테이블 구성
 - ⬜ (사용자) Supabase 가입, 프로젝트 생성
 - ⬜ (사용자) `.env.local`에 키 3개 입력
-- ⬜ 승인된 SQL을 `supabase/migrations/`로 옮기고 적용 (승인 후)
+- ⬜ `supabase/migrations/` SQL을 Supabase에 적용 (**별도 승인 후**)
 - ⬜ `lib/supabase/admin.ts` (secret 키, server-only)
 - ⬜ DB 타입 생성 (`database.types.ts`)
 - ⬜ 데모 상품 시드 데이터 15~20개
@@ -42,8 +44,8 @@
 ## Phase 5 — 이미지 업로드와 상태 처리
 - ⬜ 업로드 URL 발급 Action, 업로드 컴포넌트(미리보기, 진행 상태, 재시도)
 - ⬜ 교체·삭제 시 파일 정리
+- ⬜ 매직 바이트 검사, 실패 상황별 파일 정리 ([storage.md](./specs/storage.md) 표 1~9)
 - ⬜ 네트워크 오류, 중복 제출 방지 점검
-- ⬜ (선택, 승인 필요) 요청 횟수 제한
 
 ## Phase 6 — 검색·필터·페이지네이션
 - ⬜ 상품명·SKU 검색, 카테고리·재고 부족 필터, 정렬
@@ -55,6 +57,11 @@
 - ⬜ (사용자 승인) Vercel 프로젝트 생성, 환경변수 등록
 - ⬜ 배포 환경 전체 QA
 - ⬜ README 작성 (GitHub URL, Vercel URL 포함)
+
+## 선택 작업 — 요청 횟수 제한 (보류, 필수 기능 완료 후 검토)
+- ⏸ 한도 숫자와 도입 여부 승인
+- ⬜ `optional/003` 적용, fail-closed 구현, `RATE_LIMIT_ENABLED` 스위치
+- ⬜ 한도 초과 안내 QA
 
 ## Phase 8 — 심화 (미션 범위 밖)
 - 다중 이미지, 고아 파일 정리, CSV 내보내기, 인증·사업장(미션 7), 주문·재고 연동

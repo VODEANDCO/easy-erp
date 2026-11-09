@@ -1,10 +1,15 @@
 -- ═══════════════════════════════════════════════════════════════
--- [초안] 003_demo_rate_limit.sql — 쓰기 요청 횟수 제한
+-- [선택 작업 · 보류] 003_demo_rate_limit.sql — 쓰기 요청 횟수 제한
 --
--- ⚠️ 승인 전 적용 금지.
+-- ⚠️ 필수 CRUD 범위가 아닙니다. 001·002 와 함께 적용하지 않습니다.
+--    한도 숫자와 도입 여부가 승인된 뒤, 필수 기능이 끝나면 적용을 검토합니다.
 --
 -- 목적: 공개 데모에서 같은 접속자가 등록/수정/삭제/업로드를 짧은 시간에 대량 반복하는 것을 늦춘다.
 --       평가자의 일반적인 CRUD·이미지 테스트는 방해하지 않도록 한도를 넉넉하게 잡는다.
+--
+-- 장애 시 동작: fail-closed
+--   - 이 함수 호출이 실패하면 서버는 쓰기 요청을 "거부"하고 안내 문구를 보여준다.
+--   - 제한 기능을 끄려면 RATE_LIMIT_ENABLED=false 로 "명시적으로" 끈다 (장애로 꺼지는 일은 없음).
 --
 -- 동작 방식
 --   - Next.js 서버가 접속자 IP를 비밀 salt 와 함께 HMAC-SHA256 으로 해시해 client_key 로 보낸다.
@@ -39,6 +44,10 @@ alter table public.demo_write_events enable row level security;
 revoke all on table public.demo_write_events from anon, authenticated;
 grant select, insert, delete on table public.demo_write_events to service_role;
 
+-- identity 컬럼이 사용하는 시퀀스 권한 (INSERT 에 필요)
+revoke all   on sequence public.demo_write_events_id_seq from anon, authenticated;
+grant  usage on sequence public.demo_write_events_id_seq to service_role;
+
 -- 허용되면 기록하고 true, 한도를 넘으면 false.
 -- 예: select public.consume_write_quota('<hash>', 'product.write', 60, interval '10 minutes');
 create or replace function public.consume_write_quota(
@@ -55,7 +64,8 @@ declare
   recent_count integer;
 begin
   -- 같은 접속자·같은 행동의 동시 요청은 순서대로 처리 (동시에 보내서 한도를 넘기는 것 방지)
-  perform pg_advisory_xact_lock(hashtext(p_client_key || ':' || p_action));
+  -- 7102 = 요청 제한 전용 잠금 네임스페이스 (상품 개수 제한 7101 과 겹치지 않음)
+  perform pg_advisory_xact_lock(7102, hashtext(p_client_key || ':' || p_action));
 
   -- 24시간 지난 기록 일괄 정리 (created_at 인덱스 사용)
   delete from public.demo_write_events
