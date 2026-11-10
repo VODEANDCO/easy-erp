@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- [v2] 상품 테이블
+-- [v3] 상품 테이블 (v3: 판매가·원가 원 단위 정수 제약 추가)
 --
 -- ⚠️ Supabase DB 적용은 아직 승인되지 않았습니다. (migrations 폴더 이동 ≠ 적용 승인)
 --    `supabase db push` 나 SQL Editor 실행 전에 반드시 별도 승인을 받습니다.
@@ -67,6 +67,16 @@ create table public.products (
     check (price >= 0),
   constraint products_cost_non_negative
     check (cost is null or cost >= 0),
+
+  -- 이번 MVP는 원 단위 정수만 허용합니다. (앱 zod 규칙과 동일)
+  -- 컬럼 타입 numeric(12,2)는 유지하고, 소수 부분이 있는 값만 거부합니다.
+  -- ⚠️ 주의: numeric(12,2)는 제약조건 검사 "전에" 소수 셋째 자리에서 반올림합니다.
+  --    예) 1.5 → 거부, 1.005 → 1.01로 반올림 → 거부, 1.004 → 1.00으로 반올림 → 1로 저장(통과)
+  --    그래서 소수 셋째 자리 이하 입력은 앱(zod)이 먼저 거부해야 합니다.
+  constraint products_price_whole_won
+    check (price = trunc(price)),
+  constraint products_cost_whole_won
+    check (cost is null or cost = trunc(cost)),
 
   constraint products_stock_quantity_non_negative
     check (stock_quantity >= 0),

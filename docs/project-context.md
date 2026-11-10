@@ -42,8 +42,8 @@
 | name | text NOT NULL | 공백 제거 후 1~100자 |
 | sku | text NOT NULL UNIQUE | 앞뒤 공백 제거 + 대문자 변환 후 저장, `A-Z 0-9 - _` 2~40자 |
 | category | text | 앱에 정의된 카테고리 목록 중 하나 (DB는 1~50자만 검사 → 나중에 카테고리 테이블로 확장 가능) |
-| price | numeric(12,2) NOT NULL | 0 이상, **원 단위 정수만** (앱이 소수점 입력을 거부. DB 타입은 그대로 두고 앱에서 제한) |
-| cost | numeric(12,2) | 선택, 0 이상, 원 단위 정수만 |
+| price | numeric(12,2) NOT NULL | 0 이상, **원 단위 정수만** (zod + DB 제약 `products_price_whole_won`) |
+| cost | numeric(12,2) | 선택, 0 이상, 원 단위 정수만 (`products_cost_whole_won`) |
 | stock_quantity | integer NOT NULL | 0 이상 정수 |
 | safety_stock | integer NOT NULL | 0 이상 정수 |
 | status | text NOT NULL | `active`(판매중) / `inactive`(판매중지), 기본 active |

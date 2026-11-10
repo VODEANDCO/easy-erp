@@ -118,6 +118,7 @@ Product Form의 구역:
 | 원인 | 판단 기준 | 안내 |
 |---|---|---|
 | SKU 중복 | Postgres `23505` + `products_sku_key` | SKU 칸에 "이미 사용 중인 SKU입니다" |
+| 가격 소수점 | `23514` + `products_price_whole_won` / `products_cost_whole_won` | 해당 칸에 "원 단위 정수로 입력해 주세요" (zod가 먼저 막으므로 정상 사용에서는 발생하지 않음) |
 | DB 제약 위반 | `23514` | "입력값을 다시 확인해 주세요" |
 | 상품 수 한도 | `PRODUCT_LIMIT_REACHED` | "데모 환경은 최대 300개까지 등록할 수 있습니다" |
 | 요청 과다 (선택) | quota false | "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요" |
