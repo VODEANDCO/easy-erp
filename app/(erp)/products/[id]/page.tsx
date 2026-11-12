@@ -6,6 +6,7 @@ import { LinkButton } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EditIcon } from "@/components/ui/icons";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AccessBlocked } from "@/features/products/components/access-blocked";
 import { DeleteProductButton } from "@/features/products/components/delete-product-button";
 import { PreviewNotice } from "@/features/products/components/preview-notice";
 import { StatusBadge, StockBadge } from "@/features/products/components/product-badges";
@@ -37,8 +38,11 @@ export default function ProductDetailPage({ params }: PageProps<"/products/[id]"
 
 async function ProductDetail({ params }: { params: PageProps<"/products/[id]">["params"] }) {
   const { id } = await params;
+  const query = await getProduct(id);
+  // 접근 권한이 확인되지 않으면 상품 존재 여부도 알려주지 않고 차단 안내만 보여줍니다.
+  if (!query.ok) return <AccessBlocked reason={query.reason} />;
   // ID 형식이 틀리거나 상품이 없으면 not-found.tsx 화면을 보여줍니다.
-  const product = await getProduct(id);
+  const product = query.data;
   if (!product) notFound();
 
   const margin = marginRate(product.price, product.cost);

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AccessBlocked } from "@/features/products/components/access-blocked";
 import { PreviewNotice } from "@/features/products/components/preview-notice";
 import { ProductForm } from "@/features/products/components/product-form";
 import { ProductFormSkeleton } from "@/features/products/components/skeletons";
@@ -32,7 +33,10 @@ export default function EditProductPage({ params }: PageProps<"/products/[id]/ed
 
 async function EditProduct({ params }: { params: PageProps<"/products/[id]/edit">["params"] }) {
   const { id } = await params;
-  const product = await getProduct(id);
+  const query = await getProduct(id);
+  // 접근 권한이 확인되지 않으면 수정 폼(기존 값)을 보여주지 않습니다.
+  if (!query.ok) return <AccessBlocked reason={query.reason} />;
+  const product = query.data;
   if (!product) notFound();
 
   return (

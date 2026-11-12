@@ -12,8 +12,20 @@ import { Logo, SidebarNav } from "./sidebar-nav";
  *
  * - 1024px 이상: 고정 사이드바
  * - 1024px 미만: 햄버거 버튼 → 드로어
+ *
+ * 상단 뱃지
+ * - preview: DB 연결 전 미리보기 데이터를 보여줄 때
+ * - demo   : 공개 데모 모드(PRODUCTS_DEMO_MODE=true). 누구나 보고 바꿀 수 있으므로 테스트 데이터만 쓰도록 안내
  */
-export function AppShell({ preview, children }: { preview: boolean; children: ReactNode }) {
+export function AppShell({
+  preview,
+  demo,
+  children,
+}: {
+  preview: boolean;
+  demo: boolean;
+  children: ReactNode;
+}) {
   return (
     <div className="flex min-h-dvh">
       <a
@@ -47,6 +59,11 @@ export function AppShell({ preview, children }: { preview: boolean; children: Re
           {preview && (
             <Badge tone="warning" dot>
               DB 연결 전 · 미리보기
+            </Badge>
+          )}
+          {!preview && demo && (
+            <Badge tone="warning" dot>
+              공개 데모 · 테스트 데이터만 입력하세요
             </Badge>
           )}
         </header>

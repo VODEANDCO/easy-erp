@@ -55,6 +55,16 @@
 - ⬜ URL 쿼리 동기화, Pagination
 - ⬜ 반응형 (태블릿, 모바일)
 
+## 공개 배포 전 필수 재검토 (미완료 · 2026-11-12 기록)
+> 공개 데모 모드(`PRODUCTS_DEMO_MODE=true`)는 로그인 없이 누구나 상품을 보고 바꿀 수 있습니다.
+> Vercel 공개 배포 전에 아래 항목을 다시 검토하고 결정합니다.
+- ⬜ 요청 횟수 제한 도입 여부와 한도 결정 (`supabase/drafts/optional/003_demo_rate_limit.sql`, fail-closed)
+- ⬜ 파일 업로드 악용 방지: 업로드 URL만 받고 상품은 저장하지 않는 반복 요청(고아 파일 누적), 800MB 소프트 한도의 한계, 고아 파일 정리 방법 ([specs/storage.md](./specs/storage.md))
+- ⬜ 모든 Server Action(등록·수정·삭제·업로드 URL 발급)이 `getBusinessAccess()` 를 먼저 확인하는지 점검
+- ⬜ 배포 빌드의 브라우저 번들에 secret 키·`sb_secret_`·키 이름이 없는지 재검사
+- ⬜ Vercel 환경변수: `SUPABASE_SECRET_KEY`, `PRODUCTS_DEMO_MODE` 에 `NEXT_PUBLIC_` 이 붙지 않았는지 확인
+- ⬜ 긴급 차단 절차 확인: `PRODUCTS_DEMO_MODE` 를 지우고 재배포하면 상품 화면이 차단되는지
+
 ## Phase 7 — QA, README, 배포
 - ⬜ (사용자 승인) GitHub 저장소 생성, push
 - ⬜ (사용자 승인) Vercel 프로젝트 생성, 환경변수 등록

@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/ui/state";
 import { PageHeader } from "@/components/layout/page-header";
 import { Pagination } from "@/components/ui/pagination";
 import { PRODUCTS_PAGE_SIZE } from "@/features/products/constants";
+import { AccessBlocked } from "@/features/products/components/access-blocked";
 import { PreviewNotice } from "@/features/products/components/preview-notice";
 import { ProductFilters } from "@/features/products/components/product-filters";
 import { ProductTable } from "@/features/products/components/product-table";
@@ -41,7 +42,11 @@ export default function ProductsPage({ searchParams }: PageProps<"/products">) {
 
 async function ProductList({ searchParams }: { searchParams: PageProps<"/products">["searchParams"] }) {
   const params = parseProductListParams(await searchParams);
-  const result = await listProducts(params);
+  const query = await listProducts(params);
+  // 접근 권한이 확인되지 않으면 상품 데이터 대신 차단 안내만 보여줍니다.
+  if (!query.ok) return <AccessBlocked reason={query.reason} />;
+
+  const result = query.data;
   const current = { ...params, page: result.page };
 
   if (result.totalAll === 0) {
