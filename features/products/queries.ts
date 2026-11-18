@@ -1,4 +1,5 @@
 import "server-only";
+import { connection } from "next/server";
 import {
   getBusinessAccess,
   type BusinessAccess,
@@ -111,6 +112,9 @@ function filteredProducts(
 export async function listProducts(
   params: ProductListParams,
 ): Promise<ProductQueryResult<ProductListResult>> {
+  // 실제 사용자 요청에서만 실행합니다. Next.js 내부 prerender 에서는 여기서 멈춰 Supabase 조회를 시작하지 않습니다.
+  // (prerender 중 중단된 fetch 를 Supabase 가 일반 오류로 바꿔 "조회 실패"로 잘못 기록되던 문제 · ISSUE-1)
+  await connection();
   const access = await getBusinessAccess();
   if (!access.ok) return { ok: false, reason: access.reason };
 
@@ -159,6 +163,8 @@ export async function listProducts(
 
 /** 접근이 허용된 경우: ID 형식이 틀리거나 상품이 없으면 data 가 null (페이지에서 notFound() 처리) */
 export async function getProduct(id: string): Promise<ProductQueryResult<Product | null>> {
+  // 실제 사용자 요청에서만 실행합니다. (listProducts 와 같은 이유 · ISSUE-1)
+  await connection();
   // ID 검사보다 권한 확인을 먼저 합니다. (권한 없는 사용자가 ID 존재 여부를 알아내지 못하도록)
   const access = await getBusinessAccess();
   if (!access.ok) return { ok: false, reason: access.reason };
