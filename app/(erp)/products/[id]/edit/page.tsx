@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { PageHeader } from "@/components/layout/page-header";
+import { Alert } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AccessBlocked } from "@/features/products/components/access-blocked";
 import { PreviewNotice } from "@/features/products/components/preview-notice";
@@ -10,6 +11,7 @@ import { ProductFormSkeleton } from "@/features/products/components/skeletons";
 import { toProductFormValues } from "@/features/products/form-values";
 import { getProduct, isPreviewMode } from "@/features/products/queries";
 import { productHref } from "@/features/products/url";
+import { isProductsDemoMode } from "@/lib/auth/business-access";
 
 export const metadata: Metadata = { title: "상품 수정" };
 
@@ -51,6 +53,11 @@ async function EditProduct({ params }: { params: PageProps<"/products/[id]/edit"
         description="* 표시는 필수 입력 항목입니다."
       />
       {isPreviewMode() && <PreviewNotice variant="form" />}
+      {isProductsDemoMode() && (
+        <Alert tone="warning" title="공개 데모 · 테스트 데이터만 입력하세요" className="mb-5">
+          누구나 볼 수 있는 화면입니다. 실제 상품·거래처·개인정보는 입력하지 마세요.
+        </Alert>
+      )}
       <ProductForm
         key={product.updated_at}
         mode="edit"

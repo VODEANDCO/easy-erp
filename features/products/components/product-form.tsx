@@ -1,13 +1,19 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonClass } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { Input, InputWithSuffix, Select, Textarea } from "@/components/ui/form-controls";
-import { toFieldErrors, type ActionResult, type FieldErrors } from "@/lib/action-result";
+import {
+  toFieldErrors,
+  type ActionFailureCode,
+  type ActionResult,
+  type FieldErrors,
+} from "@/lib/action-result";
 import { cn } from "@/lib/cn";
 import { createProduct, updateProduct } from "../actions";
 import {
@@ -44,6 +50,14 @@ type Props = Mode & {
   cancelHref: string;
 };
 
+/** 입력값 문제가 아닌 실패는 주의(노란색) 안내로, 그 외는 오류(빨간색) 안내로 보여줍니다. */
+const FAILURE_TITLES: Partial<Record<ActionFailureCode, string>> = {
+  DB_NOT_CONNECTED: "저장되지 않았습니다",
+  FORBIDDEN: "지금은 저장할 수 없습니다",
+  LIMIT_REACHED: "등록 한도에 도달했습니다",
+  CONFLICT: "다른 곳에서 먼저 수정되었습니다",
+  NOT_FOUND: "상품을 찾을 수 없습니다",
+};
 
 const fieldId = (field: ProductFormField) => `product-${field}`;
 
@@ -57,6 +71,7 @@ type Result = ActionResult<{ id: string }> | null;
 export function ProductForm(props: Props) {
   const { initialValues, cancelHref } = props;
   const action = props.mode === "create" ? createProduct : updateProduct;
+  const router = useRouter();
   const [state, formAction, actionPending] = useActionState<Result, FormData>(action, null);
   const [transitionPending, startTransition] = useTransition();
   const pending = actionPending || transitionPending;
@@ -143,11 +158,30 @@ export function ProductForm(props: Props) {
       {failure && (
         <div ref={alertRef} tabIndex={-1} className="mb-5 outline-none">
           <Alert
-            tone={failure.code === "DB_NOT_CONNECTED" ? "warning" : "danger"}
-            title={failure.code === "DB_NOT_CONNECTED" ? "저장되지 않았습니다" : "저장하지 못했습니다"}
+            tone={FAILURE_TITLES[failure.code] ? "warning" : "danger"}
+            title={FAILURE_TITLES[failure.code] ?? "저장하지 못했습니다"}
             live="assertive"
           >
             {failure.message}
+            {failure.code === "CONFLICT" && (
+              <Button
+                type="button"
+                variant="secondary"
+                className="mt-2.5"
+                onClick={() => {
+                  if (window.confirm("지금 입력한 내용은 사라지고 최신 내용으로 바뀝니다. 불러올까요?")) {
+                    router.refresh(); // 수정 폼은 updated_at 이 바뀌면 최신 값으로 다시 그려집니다.
+                  }
+                }}
+              >
+                최신 내용 불러오기
+              </Button>
+            )}
+            {failure.code === "NOT_FOUND" && (
+              <Link href="/products" className={cn(buttonClass({ variant: "secondary" }), "mt-2.5")}>
+                상품 목록으로
+              </Link>
+            )}
           </Alert>
         </div>
       )}
