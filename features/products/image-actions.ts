@@ -7,8 +7,11 @@ import { PRODUCT_IMAGE_STORAGE } from "./constants";
 import { imageFileSchema } from "./image";
 import {
   buildImagePath,
+  checkDiscardKey,
   checkUploadCapacity,
+  createDiscardKey,
   isAllowedImagePath,
+  isDiscardSigningReady,
   isProductImageUploadEnabled,
   removeUnusedImage,
   verifyStoredImage,
@@ -41,10 +44,21 @@ async function checkUploadAccess() {
   return { ok: true as const, access };
 }
 
-/** 1회용 업로드 허가 발급: 형식·크기 재검사 → 용량 상한 확인(읽기 전용) → 서버가 경로 결정 → 서명 업로드 URL */
-export async function requestImageUpload(input: unknown): Promise<ActionResult<{ path: string; token: string }>> {
+/**
+ * 1회용 업로드 허가 발급: 형식·크기 재검사 → 용량 상한 확인(읽기 전용) → 서버가 경로 결정 → 서명 업로드 URL
+ * 함께 돌려주는 discardKey 는 "저장 전에 이 업로드를 폐기"하는 용도로만 쓰입니다. (discardImageUpload)
+ */
+export async function requestImageUpload(
+  input: unknown,
+): Promise<ActionResult<{ path: string; token: string; discardKey: string }>> {
   const gate = await checkUploadAccess();
   if (!gate.ok) return gate.result;
+
+  // 폐기 서명 키가 없으면 폐기할 수 없는 파일이 생기므로 업로드를 받지 않습니다 (fail-closed).
+  if (!isDiscardSigningReady()) {
+    console.error("[products] 업로드 거부: PRODUCTS_IMAGE_DISCARD_SECRET 이 없거나 형식이 올바르지 않습니다");
+    return { ok: false, code: "UPLOAD_UNAVAILABLE", message: UPLOAD_DISABLED_MESSAGE };
+  }
 
   const file = imageFileSchema.safeParse(input);
   if (!file.success) {
@@ -74,7 +88,9 @@ export async function requestImageUpload(input: unknown): Promise<ActionResult<{
       console.error("[products] 업로드 URL 발급 실패", { message: error?.message });
       return { ok: false, code: "UNKNOWN", message: "일시적인 오류로 이미지를 올릴 수 없습니다. 잠시 후 다시 시도해 주세요." };
     }
-    return { ok: true, data: { path: data.path, token: data.token } };
+    const discardKey = createDiscardKey(data.path);
+    if (!discardKey) return { ok: false, code: "UPLOAD_UNAVAILABLE", message: UPLOAD_DISABLED_MESSAGE };
+    return { ok: true, data: { path: data.path, token: data.token, discardKey } };
   } catch (error) {
     console.error("[products] 업로드 URL 발급 실패", { message: error instanceof Error ? error.message : "unknown" });
     return { ok: false, code: "UNKNOWN", message: "일시적인 오류로 이미지를 올릴 수 없습니다. 잠시 후 다시 시도해 주세요." };
@@ -107,4 +123,41 @@ export async function verifyImageUpload(path: unknown): Promise<ActionResult<{ p
     message: check.message,
     fieldErrors: { image_path: check.message },
   };
+}
+
+/**
+ * 저장 전 미사용 업로드 폐기 (5-B)
+ *
+ * 권한 검증 순서: ① 데모 모드 → ② 입력 형태 → ③ 경로 형식 → ④ 폐기 서명(형식·만료·HMAC)
+ *               → ⑤ 어떤 상품에도 연결되지 않은 파일인지 확인 후 삭제 (removeUnusedImage)
+ * - 서명이 맞아도 **DB 에 연결된 이미지는 삭제하지 않습니다.** 연결 여부 확인이 실패·시간 초과되면 지우지 않습니다.
+ * - 업로드 스위치는 확인하지 않습니다. (스위치를 끈 뒤에도 남은 미사용 파일은 정리할 수 있게)
+ * - ② 이후 결과는 성공·실패와 관계없이 같은 응답입니다. (파일 존재·서명 상태를 알아내는 데 쓰이지 않게)
+ *   거부 사유는 서버 로그에만 남깁니다. (경로·서명값은 기록하지 않음)
+ * - 한계: 연결 확인과 Storage 삭제 사이에 다른 요청이 같은 경로를 연결하는 경합은 막지 못합니다. (docs/specs/storage.md)
+ */
+export async function discardImageUpload(input: unknown): Promise<ActionResult> {
+  const access = await getBusinessAccess();
+  if (!access.ok || access.mode !== "demo") {
+    return { ok: false, code: "FORBIDDEN", message: FORBIDDEN_MESSAGE };
+  }
+
+  const done: ActionResult = { ok: true, data: undefined };
+  const reject = (reason: string) => {
+    console.error("[products] 이미지 폐기 거부", { reason });
+    return done;
+  };
+
+  if (typeof input !== "object" || input === null) return reject("MALFORMED_INPUT");
+  const { path, discardKey } = input as { path?: unknown; discardKey?: unknown };
+  if (typeof path !== "string" || path.length > 200 || typeof discardKey !== "string" || discardKey.length > 100) {
+    return reject("MALFORMED_INPUT");
+  }
+  if (!isAllowedImagePath(access, path)) return reject("INVALID_PATH");
+
+  const key = checkDiscardKey(path, discardKey);
+  if (key !== "OK") return reject(key);
+
+  await removeUnusedImage(path);
+  return done;
 }

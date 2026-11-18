@@ -267,14 +267,65 @@ export async function updateProduct(
     };
   }
 
-  // ③ 이미지 경로(image_path)는 수정 대상에서 **제외**합니다.
-  //    폼은 기존 경로를 그대로 보내지만, 어떤 값이 와도 DB 에 쓰지 않으므로 기존 이미지가 바뀌거나 지워지지 않습니다.
-  //    (이미지 교체·삭제는 업로드 기능 단계에서 따로 구현)
+  // 폼이 보낸 image_path = "저장 후 원하는 이미지" (null = 이미지 없음). 이전 경로는 폼이 아니라 DB 에서 읽습니다.
+  const desiredImage = input.image_path;
+  let previousImage: string | null = null;
+  let imageChanged = false;
 
-  // ④ 수정 충돌 검사: 불러온 시점의 updated_at 과 DB 값이 **정확히 같을 때만** 수정합니다.
-  //    수정일(updated_at)은 DB 트리거가 저장 시각으로 바꾸고, 등록일과 id 는 트리거가 바뀌지 않게 막습니다.
   try {
     const db = createAdminClient();
+
+    /** 대상 행이 없을 때 "삭제됨"과 "먼저 수정됨"을 구분합니다. */
+    const missingOrConflict = async (): Promise<ActionResult<{ id: string }>> => {
+      const { data: exists, error: lookupError } = await db
+        .from("products")
+        .select("id")
+        .eq("id", productId)
+        .maybeSingle<{ id: string }>();
+      if (lookupError) return writeFailure("update", lookupError);
+      if (!exists) return { ok: false, code: "NOT_FOUND", message: NOT_FOUND_MESSAGE };
+      return {
+        ok: false,
+        code: "CONFLICT",
+        message:
+          "이 페이지를 연 뒤에 다른 곳에서 상품 정보가 먼저 수정되었습니다. 덮어쓰지 않도록 저장을 멈췄습니다. 입력한 내용을 따로 복사해 둔 뒤, 최신 내용을 불러와 다시 수정해 주세요.",
+      };
+    };
+
+    // ③ 현재 이미지 읽기: 수정과 **같은 updated_at 조건**으로 읽습니다.
+    //    그 사이 다른 수정이 끼어들면 ④의 UPDATE 가 0행(충돌)이 되어 아무 파일도 지우지 않습니다.
+    const { data: current, error: currentError } = await db
+      .from("products")
+      .select("image_path")
+      .eq("id", productId)
+      .eq("updated_at", input.updated_at)
+      .maybeSingle<{ image_path: string | null }>();
+    if (currentError) return writeFailure("update", currentError);
+    if (!current) return await missingOrConflict();
+
+    previousImage = current.image_path;
+    imageChanged = desiredImage !== previousImage;
+
+    // 새 이미지로 바꾸는 경우: 저장 직전 재검증 (확인하지 못하면 저장하지 않음 · fail-closed)
+    if (imageChanged && desiredImage !== null) {
+      const check = await verifyStoredImage(access, desiredImage);
+      if (!check.ok) {
+        // 내용이 틀리거나 너무 큰 파일은 어떤 상품에도 연결되지 않은 경우에만 지웁니다. (네트워크 오류로는 지우지 않음)
+        if (check.reason === "CONTENT_MISMATCH" || check.reason === "TOO_LARGE") {
+          await removeUnusedImage(desiredImage);
+        }
+        return {
+          ok: false,
+          code: check.reason === "CHECK_FAILED" ? "UNKNOWN" : "VALIDATION_FAILED",
+          message: check.message,
+          fieldErrors: { image_path: check.message },
+        };
+      }
+    }
+
+    // ④ 수정 충돌 검사: 불러온 시점의 updated_at 과 DB 값이 **정확히 같을 때만** 수정합니다.
+    //    이미지가 바뀌지 않았으면 image_path 는 UPDATE 에 넣지 않습니다. (기존 수정 동작과 동일)
+    //    수정일(updated_at)은 DB 트리거가 저장 시각으로 바꾸고, 등록일과 id 는 트리거가 바뀌지 않게 막습니다.
     const { data, error } = await db
       .from("products")
       .update({
@@ -287,6 +338,7 @@ export async function updateProduct(
         stock_quantity: input.stock_quantity,
         safety_stock: input.safety_stock,
         description: input.description,
+        ...(imageChanged ? { image_path: desiredImage } : {}),
       })
       .eq("id", productId)
       .eq("updated_at", input.updated_at) // 글자 그대로 전달 → DB 가 timestamptz 로 정확히 비교
@@ -294,26 +346,15 @@ export async function updateProduct(
       .maybeSingle<{ id: string }>();
 
     if (error) return writeFailure("update", error);
-
-    // ⑤ 바뀐 행이 없으면: 상품이 아직 있는지 확인해 "삭제됨"과 "먼저 수정됨"을 구분합니다.
-    if (!data) {
-      const { data: current, error: lookupError } = await db
-        .from("products")
-        .select("id")
-        .eq("id", productId)
-        .maybeSingle<{ id: string }>();
-      if (lookupError) return writeFailure("update", lookupError);
-      if (!current) return { ok: false, code: "NOT_FOUND", message: NOT_FOUND_MESSAGE };
-      return {
-        ok: false,
-        code: "CONFLICT",
-        message:
-          "이 페이지를 연 뒤에 다른 곳에서 상품 정보가 먼저 수정되었습니다. 덮어쓰지 않도록 저장을 멈췄습니다. 입력한 내용을 따로 복사해 둔 뒤, 최신 내용을 불러와 다시 수정해 주세요.",
-      };
-    }
+    // 바뀐 행이 없으면: ③과 ④ 사이에 다른 수정·삭제가 있었던 것 → 파일 작업 없이 안내
+    if (!data) return await missingOrConflict();
   } catch (error) {
     return writeFailure("update", thrown(error));
   }
+
+  // ⑤ DB 수정이 **성공한 뒤에만** 이전 이미지 정리 (DB 가 먼저, 파일은 나중)
+  //    어떤 상품도 쓰지 않을 때만 삭제하고, 실패해도 수정은 유지한 채 서버 로그에 orphan 으로 남깁니다.
+  if (imageChanged && previousImage) await removeUnusedImage(previousImage);
 
   // ⑥ 성공: 안내 쿠키 → 목록·상세 캐시 갱신 → 상세로 이동
   await setFlashToast("updated");

@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { BusinessAccess } from "@/lib/auth/business-access";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PRODUCT_IMAGE, PRODUCT_IMAGE_STORAGE, type ProductImageMime } from "./constants";
@@ -32,6 +32,69 @@ const MIME_BY_EXTENSION: Record<string, ProductImageMime> = {
 /** 업로드 전용 차단 스위치: 서버 전용 환경변수가 정확히 "true" 일 때만 업로드를 허용합니다. (기본 = 꺼짐) */
 export function isProductImageUploadEnabled(): boolean {
   return process.env.PRODUCTS_IMAGE_UPLOAD_ENABLED === "true";
+}
+
+// ─────────────────────────────────────────────────────────────
+// 폐기 서명(discardKey)
+// - 업로드 허가를 받은 브라우저 탭만 "그 경로의 미사용 업로드"를 폐기할 수 있게 하는 서버 서명값입니다.
+// - 용도는 폐기 하나뿐입니다. 상품 등록·수정·삭제나 다른 파일에 대한 권한으로 쓰지 않습니다.
+// - 키: 서버 전용 환경변수 PRODUCTS_IMAGE_DISCARD_SECRET (Supabase 키를 재사용하지 않음)
+//   없거나 너무 짧으면 서명할 수 없으므로 업로드 허가 자체를 발급하지 않습니다 (fail-closed).
+// - 서명 대상: 형식 버전 · 용도 · 이미지 경로 · 만료 시각(초). HMAC-SHA256, 비교는 timingSafeEqual.
+// - 만료: 발급 후 24시간. 만료되면 폐기를 거부합니다 (파일은 남음 = 안전한 방향).
+// ─────────────────────────────────────────────────────────────
+
+const DISCARD_KEY_VERSION = "v1";
+const DISCARD_KEY_PURPOSE = "discard";
+const DISCARD_KEY_TTL_SECONDS = 24 * 60 * 60;
+/** 무작위 32바이트 이상을 base64url(43자 이상) 또는 hex(64자) 로 넣습니다. */
+const DISCARD_SECRET_PATTERN = /^[A-Za-z0-9_-]{43,256}$/;
+const DISCARD_KEY_PATTERN = /^(\d{10})\.([A-Za-z0-9_-]{43})$/;
+
+function discardSecret(): Buffer | null {
+  const raw = process.env.PRODUCTS_IMAGE_DISCARD_SECRET;
+  if (typeof raw !== "string" || !DISCARD_SECRET_PATTERN.test(raw)) return null;
+  return Buffer.from(raw, "utf8");
+}
+
+/** 폐기 서명 키가 준비되어 있는지 (값은 노출하지 않음) */
+export function isDiscardSigningReady(): boolean {
+  return discardSecret() !== null;
+}
+
+function signDiscard(secret: Buffer, path: string, expiresAt: number): string {
+  return createHmac("sha256", secret)
+    .update(`${DISCARD_KEY_VERSION}.${DISCARD_KEY_PURPOSE}.${path}.${expiresAt}`)
+    .digest("base64url");
+}
+
+/** 업로드 허가와 함께 돌려줄 폐기 서명값 "<만료시각>.<서명>" (키가 없으면 null) */
+export function createDiscardKey(path: string): string | null {
+  const secret = discardSecret();
+  if (!secret) return null;
+  const expiresAt = Math.floor(Date.now() / 1000) + DISCARD_KEY_TTL_SECONDS;
+  return `${expiresAt}.${signDiscard(secret, path, expiresAt)}`;
+}
+
+export type DiscardKeyCheck = "OK" | "NO_SECRET" | "MALFORMED" | "EXPIRED" | "BAD_SIGNATURE";
+
+/** 폐기 서명값이 이 경로에 대해 발급된 유효한 값인지 확인합니다. */
+export function checkDiscardKey(path: string, key: unknown): DiscardKeyCheck {
+  const secret = discardSecret();
+  if (!secret) return "NO_SECRET";
+  if (typeof key !== "string") return "MALFORMED";
+  const match = DISCARD_KEY_PATTERN.exec(key);
+  if (!match) return "MALFORMED";
+
+  const expiresAt = Number(match[1]);
+  const now = Math.floor(Date.now() / 1000);
+  if (expiresAt <= now) return "EXPIRED";
+  if (expiresAt > now + DISCARD_KEY_TTL_SECONDS + 60) return "MALFORMED"; // 발급 규칙보다 먼 미래 = 위조
+
+  const expected = Buffer.from(signDiscard(secret, path, expiresAt));
+  const given = Buffer.from(match[2]);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return "BAD_SIGNATURE";
+  return "OK";
 }
 
 /**

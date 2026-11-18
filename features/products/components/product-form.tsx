@@ -83,6 +83,8 @@ export function ProductForm(props: Props) {
   const [seenState, setSeenState] = useState<Result>(null);
   // 이미지가 업로드·확인 중이거나 실패 상태로 남아 있으면 저장하지 않습니다. (확인되지 않은 이미지 저장 방지)
   const [imagePending, setImagePending] = useState(false);
+  /** 저장 요청 중·저장 성공 후에는 true → 이미지 칸이 미사용 업로드를 폐기하지 않습니다. */
+  const discardBlockedRef = useRef(false);
   const alertRef = useRef<HTMLDivElement>(null);
 
   // 서버 결과가 새로 오면 항목별 오류를 받아 둡니다. (렌더 중 상태 조정)
@@ -93,7 +95,10 @@ export function ProductForm(props: Props) {
 
   // 서버 결과 안내로 포커스를 옮겨 화면 읽기 프로그램과 키보드 사용자에게 알립니다.
   useEffect(() => {
-    if (state && !state.ok) alertRef.current?.focus();
+    if (state && !state.ok) {
+      discardBlockedRef.current = false; // 저장 실패 → 다시 폐기 가능 (새 이미지는 유지되어 다시 저장할 수 있음)
+      alertRef.current?.focus();
+    }
   }, [state]);
 
   const clientErrors = useMemo(() => validate(values), [values]);
@@ -145,6 +150,9 @@ export function ProductForm(props: Props) {
       formData.set("id", props.productId);
       formData.set("updated_at", props.updatedAt); // DB 문자열 그대로 (Date 변환 금지)
     }
+    // 저장 요청을 보내는 순간부터 미사용 업로드 폐기를 막습니다. (저장과 폐기가 겹치지 않게)
+    // 저장이 실패로 돌아오면 아래 effect 가 다시 풀고, 성공해 이동하면 막힌 채로 화면을 떠납니다.
+    discardBlockedRef.current = true;
     startTransition(() => formAction(formData));
   };
 
@@ -337,23 +345,16 @@ export function ProductForm(props: Props) {
           <Card>
             <CardHeader title="상품 이미지" />
             <CardBody>
-              {props.mode === "create" ? (
-                <ImageField
-                  mode="create"
-                  disabled={pending}
-                  serverError={serverErrors.image_path}
-                  onChange={set("image_path")}
-                  onPendingChange={setImagePending}
-                />
-              ) : (
-                <ImageField
-                  mode="edit"
-                  existingImagePath={initialValues.image_path || null}
-                  productName={initialValues.name}
-                  onChange={set("image_path")}
-                  onPendingChange={setImagePending}
-                />
-              )}
+              <ImageField
+                mode={props.mode}
+                initialImagePath={props.mode === "edit" ? initialValues.image_path || null : null}
+                productName={initialValues.name}
+                disabled={pending}
+                discardBlockedRef={discardBlockedRef}
+                serverError={serverErrors.image_path}
+                onChange={set("image_path")}
+                onPendingChange={setImagePending}
+              />
             </CardBody>
           </Card>
         </div>
