@@ -13,8 +13,8 @@ import {
 } from "@/lib/action-result";
 import { getBusinessAccess } from "@/lib/auth/business-access";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { removeUnusedImage, verifyStoredImage } from "./image-storage";
 import {
-  IMAGE_PATH_PATTERN,
   PRODUCT_FORM_FIELDS,
   productIdSchema,
   productInputSchema,
@@ -87,6 +87,16 @@ function writeFailure(kind: WriteKind, error: DbError): ActionResult<{ id: strin
     };
   }
 
+  // 23505 + unique(image_path): 한 이미지는 한 상품에만 연결됩니다.
+  if (error.code === "23505" && message.includes("products_image_path_key")) {
+    return {
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "이미 다른 상품에 사용 중인 이미지입니다. 이미지를 다시 올려 주세요.",
+      fieldErrors: { image_path: "이미 다른 상품에 사용 중인 이미지입니다" },
+    };
+  }
+
   // P0001: 상품 개수 한도 트리거 (products_enforce_limit)
   if (error.code === "P0001" && message.includes("PRODUCT_LIMIT_REACHED")) {
     return {
@@ -150,20 +160,29 @@ export async function createProduct(
   }
   const input = parsed.data;
 
-  // ③ 이미지 업로드는 아직 지원하지 않습니다. (폼은 보내지 않으므로, 조작된 요청만 여기에 걸림)
-  if (input.image_path !== null) {
-    return {
-      ok: false,
-      code: "VALIDATION_FAILED",
-      message: "이미지 업로드는 아직 지원하지 않습니다. 이미지 없이 등록해 주세요.",
-      fieldErrors: { image_path: "이미지 업로드는 아직 지원하지 않습니다" },
-    };
-  }
-
   // 데모 모드에서는 사업장 구분 없이 저장합니다.
   // 사업장 모드(미션 7, SQL 005 적용 후)는 business_id 를 함께 저장하도록 바꿔야 합니다.
   if (access.mode !== "demo") {
     return { ok: false, code: "FORBIDDEN", message: "지금은 상품을 등록할 수 없습니다." };
+  }
+
+  // ③ 이미지: 폼이 보낸 경로를 그대로 믿지 않고 **저장 직전에 다시 확인**합니다.
+  //    (업로드 직후 확인을 건너뛰고 경로만 보내는 조작 요청 대비 · 확인하지 못하면 저장하지 않음)
+  //    경로 형식 → Storage 에 파일 존재 → 5MB 이하 → 매직 바이트와 확장자 일치
+  if (input.image_path !== null) {
+    const check = await verifyStoredImage(access, input.image_path);
+    if (!check.ok) {
+      // 내용이 틀리거나 너무 큰 파일은 어떤 상품에도 연결되지 않은 경우에만 지웁니다.
+      if (check.reason === "CONTENT_MISMATCH" || check.reason === "TOO_LARGE") {
+        await removeUnusedImage(input.image_path);
+      }
+      return {
+        ok: false,
+        code: check.reason === "CHECK_FAILED" ? "UNKNOWN" : "VALIDATION_FAILED",
+        message: check.message,
+        fieldErrors: { image_path: check.message },
+      };
+    }
   }
 
   // ④ 저장: 검증을 통과한 컬럼만 명시적으로 넣습니다. (id·등록일·수정일·재고 부족 여부는 DB가 생성)
@@ -181,7 +200,7 @@ export async function createProduct(
         stock_quantity: input.stock_quantity,
         safety_stock: input.safety_stock,
         description: input.description,
-        image_path: null,
+        image_path: input.image_path, // 위에서 확인을 통과한 경로 또는 null
       })
       .select("id")
       .single<{ id: string }>();
@@ -303,44 +322,6 @@ export async function updateProduct(
   redirect(`/products/${productId}`);
 }
 
-/** 상품 이미지 버킷 (supabase/migrations/20261109000002). 이 버킷 밖의 파일은 지우지 않습니다. */
-const PRODUCT_IMAGE_BUCKET = "product-images";
-
-/**
- * 상품 삭제가 **성공한 뒤에만** 호출합니다. (원칙: DB 가 먼저, 파일은 나중 — docs/specs/storage.md)
- * - 허용된 상품 이미지 경로(products/<uuid>.jpg|png|webp)만 대상으로 합니다.
- * - 다른 상품이 같은 경로를 쓰고 있으면 지우지 않습니다. 확인에 실패해도 지우지 않습니다. (확실할 때만 삭제)
- *   (DB 의 unique(image_path) 제약으로 공유는 원래 불가능하지만, 한 번 더 확인합니다)
- * - 실패해도 예외를 던지지 않고 서버 로그에만 남깁니다. 이미 성공한 상품 삭제는 되돌리지 않습니다.
- */
-async function removeProductImage(imagePath: string) {
-  if (!IMAGE_PATH_PATTERN.test(imagePath)) {
-    console.error("[products] 이미지 삭제 건너뜀: 허용되지 않은 경로 형식");
-    return;
-  }
-  try {
-    const db = createAdminClient();
-    const { data: users, error: lookupError } = await db
-      .from("products")
-      .select("id")
-      .eq("image_path", imagePath)
-      .limit(1);
-    if (lookupError) {
-      logDbError(`이미지 삭제 건너뜀 (사용 여부 확인 실패, orphan 가능): ${imagePath}`, lookupError);
-      return;
-    }
-    if (users.length > 0) {
-      console.error(`[products] 이미지 삭제 건너뜀: 다른 상품이 사용 중 (${imagePath})`);
-      return;
-    }
-
-    const { error } = await db.storage.from(PRODUCT_IMAGE_BUCKET).remove([imagePath]);
-    if (error) logDbError(`이미지 파일 삭제 실패 (orphan): ${imagePath}`, { message: error.message });
-  } catch (error) {
-    logDbError(`이미지 파일 삭제 실패 (orphan): ${imagePath}`, thrown(error));
-  }
-}
-
 /** 이미 삭제됐거나 없는 상품: 목록으로 이동하고 Toast 로 알립니다. (docs/specs/products.md 5절) */
 async function redirectAlreadyDeleted(): Promise<never> {
   await setFlashToast("missing");
@@ -398,7 +379,8 @@ export async function deleteProduct(id: string): Promise<ActionResult> {
   }
 
   // ⑤ DB 삭제 성공 후에만 연결된 이미지 파일 삭제 시도 (실패해도 상품 삭제는 유지)
-  if (imagePath) await removeProductImage(imagePath);
+  //    (공용 도우미 removeUnusedImage: 버킷·허용 경로만, 다른 상품이 쓰면 건너뜀, 확인 실패 시 건너뜀, 실패는 로그만)
+  if (imagePath) await removeUnusedImage(imagePath);
 
   // ⑥ 성공: 안내 쿠키 → 목록·상세 캐시 갱신 → 목록으로 이동
   await setFlashToast("deleted");

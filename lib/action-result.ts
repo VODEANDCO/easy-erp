@@ -9,6 +9,7 @@
  *   - FORBIDDEN        : 접근 권한 없음 (예: 데모 모드가 꺼져 있음). DB에 요청하지 않음
  *   - LIMIT_REACHED    : 상품 개수 한도(300개) 도달
  *   - CONFLICT         : 수정 충돌 (페이지를 연 뒤 다른 곳에서 먼저 수정됨)
+ *   - UPLOAD_UNAVAILABLE: 이미지 업로드를 지금 받을 수 없음 (업로드 스위치 꺼짐, 미연결 파일 상한, 용량 한도)
  *   - NOT_FOUND        : 대상이 없음
  *   - UNKNOWN          : 네트워크 오류 등 일시적인 오류
  */
@@ -20,6 +21,7 @@ export type ActionFailureCode =
   | "FORBIDDEN"
   | "LIMIT_REACHED"
   | "CONFLICT"
+  | "UPLOAD_UNAVAILABLE"
   | "NOT_FOUND"
   | "UNKNOWN";
 

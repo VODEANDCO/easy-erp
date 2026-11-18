@@ -55,3 +55,18 @@ export const PRODUCT_IMAGE = {
   accept: "image/jpeg,image/png,image/webp",
 } as const;
 export type ProductImageMime = (typeof PRODUCT_IMAGE.mimeTypes)[number];
+
+/**
+ * 상품 이미지 저장소(Supabase Storage) 운영 값 (docs/specs/storage.md)
+ * - bucket: SQL 002 로 만든 버킷. 이 버킷 밖의 파일은 다루지 않습니다.
+ * - softLimitBytes: 버킷 전체 800MB "소프트 한도" (업로드 URL 발급 직전에만 확인, 강제 아님)
+ * - maxUnlinkedFiles: 어떤 상품에도 연결되지 않은 파일이 이 개수 이상이면 새 업로드 URL 발급을 거부합니다.
+ *   (업로드 URL 남용으로 고아 파일이 쌓이는 것을 막는 전체 상한 · 최대 약 20 × 5MB)
+ * - cacheControlSeconds: 업로드 시 지정하는 CDN 캐시 시간. 삭제 후에도 이 시간 동안 캐시에 남을 수 있습니다.
+ */
+export const PRODUCT_IMAGE_STORAGE = {
+  bucket: "product-images",
+  softLimitBytes: 800 * 1024 * 1024,
+  maxUnlinkedFiles: 20,
+  cacheControlSeconds: "3600",
+} as const;

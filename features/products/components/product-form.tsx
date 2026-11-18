@@ -81,6 +81,8 @@ export function ProductForm(props: Props) {
   const [submitted, setSubmitted] = useState(false);
   const [serverErrors, setServerErrors] = useState<FieldErrors>({});
   const [seenState, setSeenState] = useState<Result>(null);
+  // 이미지가 업로드·확인 중이거나 실패 상태로 남아 있으면 저장하지 않습니다. (확인되지 않은 이미지 저장 방지)
+  const [imagePending, setImagePending] = useState(false);
   const alertRef = useRef<HTMLDivElement>(null);
 
   // 서버 결과가 새로 오면 항목별 오류를 받아 둡니다. (렌더 중 상태 조정)
@@ -127,7 +129,7 @@ export function ProductForm(props: Props) {
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (pending) return; // 중복 제출 방지
+    if (pending || imagePending) return; // 중복 제출 방지 · 이미지 처리 중에는 저장하지 않음
     setSubmitted(true);
 
     const errors = validate(values);
@@ -335,7 +337,23 @@ export function ProductForm(props: Props) {
           <Card>
             <CardHeader title="상품 이미지" />
             <CardBody>
-              <ImageField />
+              {props.mode === "create" ? (
+                <ImageField
+                  mode="create"
+                  disabled={pending}
+                  serverError={serverErrors.image_path}
+                  onChange={set("image_path")}
+                  onPendingChange={setImagePending}
+                />
+              ) : (
+                <ImageField
+                  mode="edit"
+                  existingImagePath={initialValues.image_path || null}
+                  productName={initialValues.name}
+                  onChange={set("image_path")}
+                  onPendingChange={setImagePending}
+                />
+              )}
             </CardBody>
           </Card>
         </div>
@@ -354,7 +372,12 @@ export function ProductForm(props: Props) {
         >
           취소
         </Link>
-        <Button type="submit" loading={pending} loadingText="저장 중…">
+        {imagePending && !pending && (
+          <p className="mr-auto text-[13px] text-ink-secondary" role="status">
+            이미지 업로드를 마치거나 제거한 뒤 저장할 수 있습니다.
+          </p>
+        )}
+        <Button type="submit" loading={pending} loadingText="저장 중…" disabled={imagePending}>
           {submitLabel}
         </Button>
       </div>
