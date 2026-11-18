@@ -155,4 +155,4 @@
 
 | 이슈 | 내용 | 상태 |
 |---|---|---|
-| ISSUE-1 | `/products`, `/products/[id]` 요청 시 Next.js 내부 prerender 에서 Supabase 조회가 중단되어 `[products] … 조회 실패 … During prerendering, fetch() rejects…` 로그가 남음. 원인: prerender 중 `fetch` 가 Next.js 의 "중단 약속"을 받는데, Supabase 라이브러리가 이를 일반 오류 값으로 바꿔 `queries.ts` 가 DB 오류로 기록함. 재현: 서버 시작 후 첫 요청 이후 상세 요청마다 1회 (GET 만으로 재현). 사용자 응답 영향은 관찰되지 않음(200·정상 데이터), 운영 로그에 오해를 부르는 오류가 쌓임 | **미해결** — 수정안 A(`queries.ts` 에서 `await connection()`) 선택, 별도 작업 예정 |
+| ISSUE-1 | `/products`, `/products/[id]` 요청 시 Next.js 내부 prerender 에서 Supabase 조회가 중단되어 `[products] … 조회 실패 … During prerendering, fetch() rejects…` 로그가 남음. 원인: prerender 중 `fetch` 가 Next.js 의 "중단 약속"을 받는데, Supabase 라이브러리가 이를 일반 오류 값으로 바꿔 `queries.ts` 가 DB 오류로 기록함. 재현: 서버 시작 후 첫 요청 이후 상세 요청마다 1회 (GET 만으로 재현). 사용자 응답 영향은 관찰되지 않음(200·정상 데이터), 운영 로그에 오해를 부르는 오류가 쌓임 | ✅ **해결 (운영 빌드 재현 검사 기준, 커밋 `5cfbb02` · 2026-11-18)** — `listProducts`·`getProduct` 시작에 `await connection()` 추가. 같은 요청 순서로 prerender 오류 로그 21건 → 0건. 화면 데이터 10개 페이지·상태 코드·없는 ID 처리·데모 모드 꺼짐 차단·빌드 경로(◐) 변화 없음. 실제 DB 오류(검사 서버에만 잘못된 키 주입) 시 요청 시점 로그 유지. **미검증: 개발 모드(`npm run dev`) 로그, 브라우저(오류 화면 표시·화면 이동), Vercel 환경** |
