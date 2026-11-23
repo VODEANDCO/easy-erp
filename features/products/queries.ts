@@ -68,35 +68,31 @@ function toProduct(row: ProductRow): Product {
 
 /** 자세한 원인은 서버 로그에만 남기고, 화면에는 일반 문구만 전달합니다. */
 function queryFailed(context: string, error: { code?: string; message?: string; details?: string }) {
+  const cause = networkCause(error.details);
   console.error(`[products] ${context} 실패`, {
     code: error.code,
     message: error.message,
-    networkCause: networkCauseCode(error.details),
+    networkCause: cause?.code,
+    networkCauseName: cause?.name,
   });
   return new Error("상품 정보를 불러오지 못했습니다.");
 }
 
-/** 로그에 남겨도 되는 네트워크·TLS 오류 코드 (이 목록에 있는 값만 그대로 기록) */
-const NETWORK_CAUSE_CODES = new Set([
-  "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EPIPE",
-  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET", "UND_ERR_CLOSED",
-  "CERT_HAS_EXPIRED", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "ERR_TLS_CERT_ALTNAME_INVALID",
-]);
-
 /**
- * fetch failed 의 원인 "코드"만 꺼냅니다. (예: ENOTFOUND)
+ * fetch failed 의 원인 "코드"와 "오류 종류 이름"만 꺼냅니다. (예: { code: "ENOTFOUND", name: "Error" })
  * - supabase-js 는 원인을 error.details 의 "Caused by: <이름>: <문구> (<코드>)" 줄에 담아 줍니다.
- * - details 전체·원인 문구·스택은 기록하지 않습니다. (DB 오류의 details 에는 입력값이 들어 있을 수 있음)
- * - 허용 목록에 없는 코드는 "OTHER", 코드가 없으면 "NO_CODE" 로만 기록합니다.
+ * - 원인 문구·호스트·IP·스택·details 전체는 기록하지 않습니다. (DB 오류의 details 에는 입력값이 들어 있을 수 있음)
+ * - 코드: 대문자로 시작, 대문자·숫자·_ 만, 2~40자 (예: ENOTFOUND, HPE_INVALID_CONSTANT). 아니면 "NO_CODE"
+ *   → 키(sb_secret_…·sb_publishable_…)와 JWT 는 소문자를 포함하므로 이 형식에 맞을 수 없습니다.
+ * - 이름: 대문자로 시작, 영문자만, 1~40자 (예: Error, SocketError, AggregateError). 아니면 "UNKNOWN"
  * - "Caused by:" 줄이 없으면(일반 DB 오류) undefined → 기존 로그와 같습니다.
  */
-function networkCauseCode(details?: string) {
+function networkCause(details?: string) {
   const line = details?.split("\n").find((l) => l.startsWith("Caused by: "));
   if (!line) return undefined;
-  const code = /\(([A-Z0-9_]+)\)\s*$/.exec(line)?.[1];
-  if (!code) return "NO_CODE";
-  return NETWORK_CAUSE_CODES.has(code) ? code : "OTHER";
+  const code = /\(([A-Z][A-Z0-9_]{1,39})\)\s*$/.exec(line)?.[1] ?? "NO_CODE";
+  const name = /^Caused by: ([A-Z][A-Za-z]{0,39}):/.exec(line)?.[1] ?? "UNKNOWN";
+  return { code, name };
 }
 
 /**
