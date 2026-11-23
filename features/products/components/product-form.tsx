@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { useActionState, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonClass } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -68,7 +68,20 @@ function validate(values: ProductFormValues): FieldErrors {
 
 type Result = ActionResult<{ id: string }> | null;
 
+/**
+ * 화면 상태 초기화 껍데기 (ISSUE-2)
+ * cacheComponents 사용 시 Next.js 는 떠난 화면을 <Activity> 로 숨겨 두고 state 를 보존합니다.
+ * 숨겨질 때 미사용 업로드는 폐기되지만 화면 상태는 남아, 다시 들어오면 지워진 이미지 미리보기·예전 안내가 보였습니다.
+ * 숨겨질 때(useLayoutEffect 정리) 세대 번호를 올려, 다시 보일 때 폼 전체를 새로 만듭니다.
+ * 참고: node_modules/next/dist/docs/01-app/02-guides/preserving-ui-state.md
+ */
 export function ProductForm(props: Props) {
+  const [generation, setGeneration] = useState(0);
+  useLayoutEffect(() => () => setGeneration((g) => g + 1), []);
+  return <ProductFormInner key={generation} {...props} />;
+}
+
+function ProductFormInner(props: Props) {
   const { initialValues, cancelHref } = props;
   const action = props.mode === "create" ? createProduct : updateProduct;
   const router = useRouter();
@@ -375,7 +388,7 @@ export function ProductForm(props: Props) {
         </Link>
         {imagePending && !pending && (
           <p className="mr-auto text-[13px] text-ink-secondary" role="status">
-            이미지 업로드를 마치거나 제거한 뒤 저장할 수 있습니다.
+            이미지 업로드나 이전 이미지 정리가 끝나면 저장할 수 있습니다.
           </p>
         )}
         <Button type="submit" loading={pending} loadingText="저장 중…" disabled={imagePending}>

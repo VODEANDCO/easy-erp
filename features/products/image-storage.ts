@@ -327,11 +327,42 @@ export async function verifyStoredImage(access: GrantedAccess, path: unknown): P
  *   (DB 의 unique(image_path) 제약으로 공유는 원래 불가능하지만, 한 번 더 확인합니다)
  * - 실패해도 예외를 던지지 않고 서버 로그에만 남깁니다. 호출한 쪽의 DB 처리는 되돌리지 않습니다.
  */
-export async function removeUnusedImage(imagePath: string) {
+/**
+ * 미사용 이미지 정리 결과 (서버 내부용 · 로그와 폐기 응답 분류에만 사용, 화면에는 그대로 전달하지 않음)
+ * - REMOVED       : 실제로 삭제함
+ * - ALREADY_GONE  : 이미 없음 (다시 시도·중복 요청으로 먼저 지워진 경우 등)
+ * - KEPT_LINKED   : 상품에 연결된 파일이라 지우지 않음 (보호 장치)
+ * - INVALID_PATH  : 허용되지 않은 경로 형식 → 아무것도 하지 않음
+ * - LOOKUP_FAILED : 연결 여부를 확인하지 못함 → 지우지 않음 (orphan 가능)
+ * - REMOVE_FAILED : 삭제 요청 실패 또는 시간 초과 (실제 삭제 여부 알 수 없음 → orphan 가능)
+ */
+export type RemoveImageOutcome =
+  | "REMOVED"
+  | "ALREADY_GONE"
+  | "KEPT_LINKED"
+  | "INVALID_PATH"
+  | "LOOKUP_FAILED"
+  | "REMOVE_FAILED";
+
+/**
+ * 로그용 짧은 식별자: 파일 ID 앞 8자리만 남깁니다. (전체 경로는 기록하지 않음)
+ * 공개 버킷이라 전체 경로를 알면 누구나 이미지를 볼 수 있기 때문입니다. 앞 8자리로는 파일에 접근할 수 없습니다.
+ */
+function imageRef(imagePath: string) {
+  return `${imagePath.slice("products/".length, "products/".length + 8)}…`;
+}
+
+/**
+ * 어떤 상품에도 연결되지 않은 이미지 파일만 삭제합니다. (상품에 연결된 파일은 절대 삭제하지 않음)
+ * 같은 경로로 여러 번 호출해도 안전합니다. 이미 지워졌으면 ALREADY_GONE 을 돌려줍니다.
+ * 상품 등록·수정·삭제의 정리 호출은 결과를 사용하지 않고, 폐기(discardImageUpload)만 결과로 응답을 정합니다.
+ */
+export async function removeUnusedImage(imagePath: string): Promise<RemoveImageOutcome> {
   if (!IMAGE_PATH_PATTERN.test(imagePath)) {
     console.error("[products] 이미지 삭제 건너뜀: 허용되지 않은 경로 형식");
-    return;
+    return "INVALID_PATH";
   }
+  const ref = imageRef(imagePath);
   try {
     const db = createAdminClient();
     const { data: users, error: lookupError } = await db
@@ -341,24 +372,35 @@ export async function removeUnusedImage(imagePath: string) {
       .limit(1)
       .abortSignal(AbortSignal.timeout(STEP_TIMEOUT_MS.db));
     if (lookupError) {
-      console.error(`[products] 이미지 삭제 건너뜀 (사용 여부 확인 실패, orphan 가능): ${imagePath}`, {
+      console.error("[products] 이미지 삭제 건너뜀 (사용 여부 확인 실패, orphan 가능)", {
+        ref,
         code: lookupError.code,
         message: lookupError.message,
       });
-      return;
+      return "LOOKUP_FAILED";
     }
     if (users.length > 0) {
-      console.error(`[products] 이미지 삭제 건너뜀: 다른 상품이 사용 중 (${imagePath})`);
-      return;
+      console.error("[products] 이미지 삭제 건너뜀: 다른 상품이 사용 중", { ref });
+      return "KEPT_LINKED";
     }
 
     // remove() 는 취소 신호를 받지 않으므로 대기 시간만 제한합니다. (시간 초과 시 실제 삭제 여부는 알 수 없음 → orphan 가능으로 기록)
-    const { error } = await withDeadline(db.storage.from(PRODUCT_IMAGE_STORAGE.bucket).remove([imagePath]), STEP_TIMEOUT_MS.remove);
-    if (error) console.error(`[products] 이미지 파일 삭제 실패 (orphan): ${imagePath}`, { message: error.message });
+    // remove() 는 실제로 지운 파일 목록을 돌려줍니다. 1개면 삭제됨, 0개면 이미 없음.
+    const { data: removed, error } = await withDeadline(
+      db.storage.from(PRODUCT_IMAGE_STORAGE.bucket).remove([imagePath]),
+      STEP_TIMEOUT_MS.remove,
+    );
+    if (error) {
+      console.error("[products] 이미지 파일 삭제 실패 (orphan)", { ref, message: error.message });
+      return "REMOVE_FAILED";
+    }
+    return removed && removed.length > 0 ? "REMOVED" : "ALREADY_GONE";
   } catch (error) {
-    console.error(`[products] 이미지 파일 삭제 실패 (orphan): ${imagePath}`, {
+    console.error("[products] 이미지 파일 삭제 실패 (orphan)", {
+      ref,
       message: error instanceof Error ? error.message : "unknown error",
     });
+    return "REMOVE_FAILED";
   }
 }
 

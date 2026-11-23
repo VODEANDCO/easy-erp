@@ -132,21 +132,27 @@ export async function verifyImageUpload(path: unknown): Promise<ActionResult<{ p
  *               → ⑤ 어떤 상품에도 연결되지 않은 파일인지 확인 후 삭제 (removeUnusedImage)
  * - 서명이 맞아도 **DB 에 연결된 이미지는 삭제하지 않습니다.** 연결 여부 확인이 실패·시간 초과되면 지우지 않습니다.
  * - 업로드 스위치는 확인하지 않습니다. (스위치를 끈 뒤에도 남은 미사용 파일은 정리할 수 있게)
- * - ② 이후 결과는 성공·실패와 관계없이 같은 응답입니다. (파일 존재·서명 상태를 알아내는 데 쓰이지 않게)
- *   거부 사유는 서버 로그에만 남깁니다. (경로·서명값은 기록하지 않음)
+ * - 화면에는 3가지 응답만 돌려줍니다. 자세한 결과는 서버 로그에만 남깁니다. (키·서명·전체 경로는 기록하지 않음)
+ *     완료                 → { ok: true }               : 삭제함 / 이미 없음 / 상품에 연결되어 보호함 (셋을 구분하지 않음)
+ *     다시 시도 가능한 실패 → { ok: false, "UNKNOWN" }   : 연결 확인 실패 / 삭제 실패 / 시간 초과
+ *     거부                 → { ok: false, "FORBIDDEN" } : 데모 모드 아님 / 입력·경로 오류 / 서명 형식·만료·위조 (사유 구분 없이 같은 응답)
+ *   "완료"와 "거부"는 구분되지만, 폐기 서명은 서버 비밀 키 없이 만들 수 없어 이 구분으로 얻을 수 있는 정보가 없습니다.
+ *   연결 여부·파일 존재 여부는 "완료" 하나로 합쳐 드러나지 않게 합니다.
+ * - 같은 요청을 여러 번 보내도 안전합니다. (두 번째부터는 "이미 없음" → 완료)
  * - 한계: 연결 확인과 Storage 삭제 사이에 다른 요청이 같은 경로를 연결하는 경합은 막지 못합니다. (docs/specs/storage.md)
  */
-export async function discardImageUpload(input: unknown): Promise<ActionResult> {
-  const access = await getBusinessAccess();
-  if (!access.ok || access.mode !== "demo") {
-    return { ok: false, code: "FORBIDDEN", message: FORBIDDEN_MESSAGE };
-  }
+const DISCARD_REJECTED_MESSAGE = "이 이미지는 정리할 수 없습니다.";
+const DISCARD_RETRY_MESSAGE = "이미지를 정리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
-  const done: ActionResult = { ok: true, data: undefined };
-  const reject = (reason: string) => {
+export async function discardImageUpload(input: unknown): Promise<ActionResult> {
+  const startedAt = Date.now();
+  const reject = (reason: string): ActionResult => {
     console.error("[products] 이미지 폐기 거부", { reason });
-    return done;
+    return { ok: false, code: "FORBIDDEN", message: DISCARD_REJECTED_MESSAGE };
   };
+
+  const access = await getBusinessAccess();
+  if (!access.ok || access.mode !== "demo") return reject("ACCESS_DENIED");
 
   if (typeof input !== "object" || input === null) return reject("MALFORMED_INPUT");
   const { path, discardKey } = input as { path?: unknown; discardKey?: unknown };
@@ -158,6 +164,19 @@ export async function discardImageUpload(input: unknown): Promise<ActionResult> 
   const key = checkDiscardKey(path, discardKey);
   if (key !== "OK") return reject(key);
 
-  await removeUnusedImage(path);
-  return done;
+  const outcome = await removeUnusedImage(path);
+  const ms = Date.now() - startedAt;
+  switch (outcome) {
+    case "REMOVED":
+    case "ALREADY_GONE":
+    case "KEPT_LINKED":
+      console.info("[products] 미사용 이미지 폐기 완료", { result: outcome, ms });
+      return { ok: true, data: undefined };
+    case "LOOKUP_FAILED":
+    case "REMOVE_FAILED":
+      console.error("[products] 미사용 이미지 폐기 실패 (다시 시도 가능)", { result: outcome, ms });
+      return { ok: false, code: "UNKNOWN", message: DISCARD_RETRY_MESSAGE };
+    case "INVALID_PATH":
+      return reject("INVALID_PATH");
+  }
 }

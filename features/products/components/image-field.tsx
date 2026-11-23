@@ -20,12 +20,20 @@ import { ProductImage } from "./product-image";
  * 4. 서버가 실제 내용 확인 (verifyImageUpload) → 통과해야 폼에 image_path 를 넣음
  * 상품 저장 시 서버가 한 번 더 확인합니다.
  *
- * 미사용 업로드 폐기 (5-B)
+ * 미사용 업로드 폐기 (5-B · 정리 상태 표시)
  * - "이 화면에서 새로 올렸고 아직 저장되지 않은 파일"만 폐기합니다. 원래 저장된 이미지는 폐기 대상이 아닙니다.
- * - 다른 파일로 바꾸거나 [제거]·[되돌리기]를 누를 때, 또는 저장하지 않고 화면을 떠날 때 폐기합니다.
- * - 저장 요청 중이거나 저장이 끝난 뒤에는 폐기하지 않습니다. (discardBlockedRef · 부모 폼이 관리)
+ * - 다른 파일로 바꾸거나 [제거]·[되돌리기]를 누르면 화면은 바로 바뀌고, 버려진 업로드는 "정리 대기 목록"으로 옮겨
+ *   서버 응답을 받을 때까지 상태를 표시합니다. (정리 중 → 완료 / 응답 지연 / 실패 / 거부)
+ *   · 정리 중(응답 대기 20초 이내)에는 [저장]을 막습니다. Next.js 는 Server Action 을 한 번에 하나씩 보내므로,
+ *     정리 중에 저장하면 저장이 정리 뒤에서 기다리게 되기 때문입니다.
+ *   · 20초가 지나면 "응답 지연"으로 안내만 바꾸고 [저장]을 다시 허용합니다. 첫 요청은 버리지 않고 결과를 기다립니다.
+ *   · 같은 파일의 요청이 끝나기 전에는 다시 보내지 않습니다. (자동 재시도는 실패 응답 뒤 1회, 수동은 [정리 다시 시도])
+ *   · 정리에 실패해도 상품 저장은 막지 않습니다.
+ * - 저장 요청 중이거나 저장이 끝난 뒤에는 "현재 선택된 업로드"를 폐기하지 않습니다. (discardBlockedRef · 부모 폼이 관리)
+ *   정리 대기 목록의 파일은 저장 대상이 아니므로 저장 중에도 정리해도 안전합니다.
  * - 서버도 DB 에 연결된 파일은 삭제하지 않습니다. (이중 보호)
  * - 한계: 브라우저·탭을 닫으면 폐기 요청이 전송된다는 보장이 없어 파일이 남을 수 있습니다.
+ *   정리 중·실패 항목이 있으면 새로고침·탭 닫기 전에 브라우저 경고를 띄웁니다.
  *
  * 수정 화면: 원래 이미지를 [제거]해도 이 화면에서는 아무 파일도 지우지 않습니다.
  *           저장이 성공한 뒤 서버가 이전 이미지를 정리합니다.
@@ -58,10 +66,29 @@ type Props = {
   onPendingChange: (pending: boolean) => void;
 };
 
-/** 미사용 업로드 폐기 요청 (응답을 기다리지 않음 · 실패해도 화면 흐름에 영향 없음) */
-function discardUpload(upload: Upload) {
-  void discardImageUpload({ path: upload.path, discardKey: upload.discardKey }).catch(() => {});
+/** 정리 대기 목록 항목의 상태 */
+type DiscardStatus = "pending" | "delayed" | "failed" | "rejected";
+type DiscardItem = { id: number; upload: Upload; status: DiscardStatus };
+/** 서버 응답 3가지: 완료 / 다시 시도 가능한 실패 / 거부 (image-actions.ts discardImageUpload) */
+type DiscardOutcome = "done" | "retryable" | "rejected";
+
+/** 이 시간이 지나도 응답이 없으면 "응답 지연"으로 안내하고 [저장]을 다시 허용합니다. */
+const DISCARD_SLOW_NOTICE_MS = 20_000;
+/** 실패 응답 뒤 자동 재시도 전 대기 시간 (1회만) */
+const DISCARD_AUTO_RETRY_DELAY_MS = 1_500;
+
+/** 폐기 요청 1회. 브라우저 요청 자체가 실패해도(네트워크 끊김 등) "다시 시도 가능한 실패"로 돌려줍니다. */
+async function sendDiscard(upload: Upload): Promise<DiscardOutcome> {
+  try {
+    const result = await discardImageUpload({ path: upload.path, discardKey: upload.discardKey });
+    if (result.ok) return "done";
+    return result.code === "UNKNOWN" ? "retryable" : "rejected";
+  } catch {
+    return "retryable";
+  }
 }
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function ImageField({
   mode,
@@ -81,6 +108,13 @@ export function ImageField({
   const fileRef = useRef<File | null>(null);
   /** 이 화면에서 올렸고 아직 저장되지 않은 파일 (폐기 대상) */
   const uploadRef = useRef<Upload | null>(null);
+  /** 정리 대기 목록: 화면 표시용 상태 + 화면을 떠날 때 읽는 최신값(ref) */
+  const [discards, setDiscards] = useState<DiscardItem[]>([]);
+  const discardsRef = useRef<DiscardItem[]>([]);
+  /** 서버 응답을 기다리는 항목 id. 같은 파일의 요청이 끝나기 전에는 다시 보내지 않습니다. */
+  const inFlightRef = useRef<Set<number>>(new Set());
+  const discardIdRef = useRef(0);
+  const mountedRef = useRef(false);
 
   const original = mode === "edit" && initialImagePath ? initialImagePath : null;
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -92,10 +126,27 @@ export function ImageField({
 
   const pending = PENDING_PHASES.has(phase);
   const working = phase === "checking" || phase === "uploading" || phase === "verifying";
+  /** 정리 중(응답 대기 20초 이내)인 항목이 있으면 [저장]을 막습니다. 응답 지연·실패·거부는 막지 않습니다. */
+  const discardPending = discards.some((d) => d.status === "pending");
+  /** 아직 정리가 끝나지 않은 항목 (거부는 다시 시도할 수 없으므로 제외) → 새로고침·탭 닫기 경고 */
+  const discardOutstanding = discards.some((d) => d.status !== "rejected");
+  const discardFailed = discards.some((d) => d.status === "failed");
 
   useEffect(() => {
-    onPendingChange(pending);
-  }, [pending, onPendingChange]);
+    onPendingChange(pending || discardPending);
+  }, [pending, discardPending, onPendingChange]);
+
+  useEffect(() => {
+    discardsRef.current = discards;
+  }, [discards]);
+
+  // 정리 중·실패한 업로드가 있으면 새로고침·탭 닫기 전에 경고합니다. (닫으면 정리 요청이 전송된다는 보장이 없음)
+  useEffect(() => {
+    if (!discardOutstanding) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [discardOutstanding]);
 
   // 미리보기용 임시 URL 은 바뀌거나 화면을 떠날 때 해제합니다.
   useEffect(() => {
@@ -104,22 +155,80 @@ export function ImageField({
     };
   }, [previewUrl]);
 
-  // 저장하지 않고 화면을 떠나면 미사용 업로드를 폐기합니다. (저장 중·저장 성공 후에는 하지 않음)
+  // 저장하지 않고 화면을 떠나면 미사용 업로드를 폐기합니다. (현재 업로드는 저장 중·저장 성공 후에는 하지 않음)
+  // 화면이 사라진 뒤에는 결과를 표시할 수 없으므로 요청만 1회 보냅니다.
   useEffect(() => {
+    mountedRef.current = true;
+    const inFlight = inFlightRef.current;
     return () => {
+      mountedRef.current = false;
+      // 화면을 떠나는 "그 순간"의 값(저장 중·저장 성공 여부, 정리 대기 목록)이 필요하므로 일부러 최신 ref 값을 읽습니다.
       const upload = uploadRef.current;
-      // 화면을 떠나는 "그 순간"의 값(저장 중·저장 성공 여부)이 필요하므로 일부러 최신 ref 값을 읽습니다.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      if (upload && !discardBlockedRef.current) discardUpload(upload);
+      if (upload && !discardBlockedRef.current) void sendDiscard(upload);
+      // 실패한 정리 항목만 마지막으로 1회 더 요청합니다. (응답을 기다리는 항목은 이미 요청 중이므로 다시 보내지 않음)
+      for (const item of discardsRef.current) {
+        if (item.status === "failed" && !inFlight.has(item.id)) void sendDiscard(item.upload);
+      }
     };
   }, [discardBlockedRef]);
 
-  /** 진행 중인 요청을 무시하고, 미사용 업로드를 폐기하고, 새 업로드 상태를 비웁니다. */
+  const setDiscardStatus = (id: number, status: DiscardStatus, onlyIf?: DiscardStatus) =>
+    setDiscards((list) =>
+      list.map((d) => (d.id === id && (!onlyIf || d.status === onlyIf) ? { ...d, status } : d)),
+    );
+
+  /**
+   * 정리 요청 실행. 같은 항목의 요청이 끝나기 전에는 다시 보내지 않습니다.
+   * 실패 응답을 받으면 autoRetry 일 때만 1회 자동으로 다시 시도합니다. (같은 요청을 여러 번 보내도 서버에서 안전)
+   */
+  const runDiscard = async (id: number, upload: Upload, autoRetry: boolean) => {
+    if (inFlightRef.current.has(id)) return;
+    inFlightRef.current.add(id);
+    setDiscardStatus(id, "pending");
+    // 20초가 지나도 응답이 없으면 안내만 "응답 지연"으로 바꿉니다. 요청은 버리지 않고 결과를 계속 기다립니다.
+    const slowTimer = setTimeout(() => {
+      if (mountedRef.current) setDiscardStatus(id, "delayed", "pending");
+    }, DISCARD_SLOW_NOTICE_MS);
+
+    let outcome = await sendDiscard(upload);
+    if (outcome === "retryable" && autoRetry) {
+      await wait(DISCARD_AUTO_RETRY_DELAY_MS);
+      outcome = await sendDiscard(upload);
+    }
+    clearTimeout(slowTimer);
+    inFlightRef.current.delete(id);
+
+    if (!mountedRef.current) return;
+    if (outcome === "done") setDiscards((list) => list.filter((d) => d.id !== id));
+    else setDiscardStatus(id, outcome === "rejected" ? "rejected" : "failed");
+  };
+
+  /** 버려진 업로드를 정리 대기 목록에 넣고 정리를 시작합니다. (화면이 이미 사라졌으면 요청만 1회) */
+  const enqueueDiscard = (upload: Upload) => {
+    if (!mountedRef.current) {
+      void sendDiscard(upload);
+      return;
+    }
+    discardIdRef.current += 1;
+    const id = discardIdRef.current;
+    setDiscards((list) => [...list, { id, upload, status: "pending" }]);
+    void runDiscard(id, upload, true);
+  };
+
+  /** [정리 다시 시도]: 실패한 항목만, 요청 중이 아닌 것만 다시 보냅니다. */
+  const retryFailedDiscards = () => {
+    for (const item of discards) {
+      if (item.status === "failed") void runDiscard(item.id, item.upload, false);
+    }
+  };
+
+  /** 진행 중인 요청을 무시하고, 미사용 업로드를 정리 대기 목록으로 옮기고, 새 업로드 상태를 비웁니다. */
   const clearUpload = () => {
     attemptRef.current += 1;
     const upload = uploadRef.current;
     uploadRef.current = null;
-    if (upload) discardUpload(upload);
+    if (upload) enqueueDiscard(upload);
     fileRef.current = null;
     setPreviewUrl(null);
     setFileName(null);
@@ -198,7 +307,7 @@ export function ImageField({
       const uploaded: Upload = { path: ticket.data.path, discardKey: ticket.data.discardKey };
       if (attempt !== attemptRef.current) {
         // 업로드가 끝나기 전에 다른 파일로 바꿨거나 제거함 → 업로드가 끝난 지금 폐기 (먼저 폐기하면 그 뒤 생긴 파일이 남음)
-        if (!uploadError) discardUpload(uploaded);
+        if (!uploadError) enqueueDiscard(uploaded);
         return;
       }
       if (uploadError) {
@@ -344,6 +453,32 @@ export function ImageField({
         <p className="text-[13px] text-ink-secondary">저장하면 새 이미지로 바뀌고 기존 이미지는 삭제됩니다.</p>
       )}
       {fileName && <p className="truncate text-[13px] text-ink-secondary">{fileName}</p>}
+      {discardPending && (
+        <p role="status" className="text-[13px] text-ink-secondary">
+          이전에 올린 이미지를 정리하는 중…
+        </p>
+      )}
+      {discards.some((d) => d.status === "delayed") && (
+        <p role="status" className="text-[13px] text-warning">
+          이전 이미지 정리 응답이 늦어지고 있습니다. 결과를 기다리는 중이며, 지금 저장하면 저장이 늦어질 수 있습니다.
+        </p>
+      )}
+      {discardFailed && (
+        <div role="alert" className="space-y-2">
+          <p className="text-[13px] text-danger">
+            이전에 올린 이미지를 정리하지 못했습니다. 네트워크를 확인한 뒤 [정리 다시 시도]를 눌러 주세요. 상품 저장은
+            그대로 할 수 있습니다.
+          </p>
+          <Button variant="secondary" size="sm" disabled={disabled} onClick={retryFailedDiscards}>
+            정리 다시 시도
+          </Button>
+        </div>
+      )}
+      {discards.some((d) => d.status === "rejected") && (
+        <p className="text-[13px] text-ink-secondary">
+          이전에 올린 이미지 일부는 정리할 수 없습니다. 상품 저장에는 영향이 없습니다.
+        </p>
+      )}
       {shownError && (
         <p id={errorId} role="alert" className="text-[13px] text-danger">
           {shownError}
