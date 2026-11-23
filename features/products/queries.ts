@@ -6,6 +6,7 @@ import {
   type BusinessAccessDeniedReason,
 } from "@/lib/auth/business-access";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getPublicEnv } from "@/lib/env";
 import { PRODUCTS_PAGE_SIZE, PRODUCT_STATUSES, type ProductStatus } from "./constants";
 import { productIdSchema, type ProductListParams } from "./schema";
 import type { Product, ProductListResult } from "./types";
@@ -74,8 +75,38 @@ function queryFailed(context: string, error: { code?: string; message?: string; 
     message: error.message,
     networkCause: cause?.code,
     networkCauseName: cause?.name,
+    ...(cause ? networkTarget(error.details) : {}),
   });
   return new Error("상품 정보를 불러오지 못했습니다.");
+}
+
+/**
+ * [임시 진단 · ISSUE-4] 네트워크 실패가 "어느 단계에서, 어떤 주소로" 났는지 확인합니다. 원인 확인 후 제거합니다.
+ * 기록하는 값 (호스트 이름·IP·URL·키 원문은 기록하지 않음)
+ * - networkSyscall    : 실패한 시스템 호출 이름 (getaddrinfo = DNS, connect = 연결 등). 영문 소문자 20자 이하만
+ * - causeHostMatchesEnv: 실패한 주소가 환경변수 URL 의 호스트와 정확히 같은지 (true/false)
+ * - causeHostLength   : 실패한 주소의 글자 수 (정상 Supabase 호스트는 32자: ref 20자 + ".supabase.co")
+ * - envUrlPrintableAscii: 환경변수 URL 이 공백·제어문자·비ASCII(보이지 않는 문자) 없이 출력 가능한 ASCII 로만 되어 있는지
+ * - envUrlLength      : 환경변수 URL 의 글자 수 (정상 40자, 끝에 / 가 있으면 41자)
+ */
+function networkTarget(details?: string) {
+  const line = details?.split("\n").find((l) => l.startsWith("Caused by: ")) ?? "";
+  // 예: "Caused by: Error: getaddrinfo EBUSY abc.supabase.co (EBUSY)"
+  const m = /^Caused by: [A-Za-z]+: ([a-z]{1,20}) [A-Z][A-Z0-9_]{1,39} (\S{1,300})/.exec(line);
+  const rawUrl = getPublicEnv().NEXT_PUBLIC_SUPABASE_URL;
+  let envHost: string | undefined;
+  try {
+    envHost = new URL(rawUrl).hostname;
+  } catch {
+    envHost = undefined;
+  }
+  return {
+    networkSyscall: m?.[1] ?? "-",
+    causeHostMatchesEnv: m ? m[2] === envHost : undefined,
+    causeHostLength: m ? m[2].length : undefined,
+    envUrlPrintableAscii: /^[\x21-\x7e]+$/.test(rawUrl),
+    envUrlLength: rawUrl.length,
+  };
 }
 
 /**
